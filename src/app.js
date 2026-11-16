@@ -56,6 +56,8 @@ app.use(async (req, res, next) => {
 // CORS configuration
 const allowedOrigins = [
   'http://localhost:5173',
+  'https://aeriuspilotacademy.com',
+  'https://www.aeriuspilotacademy.com',
   process.env.CLIENT_ORIGIN,
 ]
   .filter(Boolean)

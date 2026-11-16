@@ -1,4 +1,4 @@
-// src/app.js
+
 import express from 'express';
 import helmet from 'helmet';
 import cors from 'cors';
@@ -6,9 +6,10 @@ import rateLimit from 'express-rate-limit';
 import dotenv from 'dotenv';
 import morgan from 'morgan';
 import cookieParser from 'cookie-parser';
-import { json, urlencoded } from 'body-parser';
+
 import connectDB from './config/db.js';
 import errorHandler from './middleware/errorHandler.js';
+
 import authRoutes from './routes/auth.js';
 import userRoutes from './routes/user.js';
 import adminRoutes from './routes/admin.js';
@@ -20,20 +21,72 @@ import { fileURLToPath } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-dotenv.config({ path: path.resolve(__dirname, '../.env') });
-dotenv.config({ path: '.env' });
 
+// Load environment variables
+dotenv.config({ path: path.resolve(__dirname, '../.env') });
+dotenv.config();
+
+// Initialize Express
 const app = express();
 
-// Connect to MongoDB
-connectDB();
+// Trust Vercel proxy
+app.set('trust proxy', 1);
 
-// Global middlewares
+// Connect to MongoDB
+// Cache the connection promise to avoid repeated connections
+let dbConnectionPromise;
+
+app.use(async (req, res, next) => {
+  try {
+    if (!dbConnectionPromise) {
+      dbConnectionPromise = connectDB().catch((error) => {
+        dbConnectionPromise = null;
+        throw error;
+      });
+    }
+
+    await dbConnectionPromise;
+    next();
+  } catch (error) {
+    console.error('Database connection error:', error);
+    next(error);
+  }
+});
+
+// CORS configuration
+const allowedOrigins = [
+  'http://localhost:5173',
+  process.env.CLIENT_ORIGIN,
+]
+  .filter(Boolean)
+  .flatMap((origin) => origin.split(',').map((item) => item.trim()));
+
+app.use(
+  cors({
+    origin: (origin, callback) => {
+      if (!origin || allowedOrigins.includes(origin)) {
+        return callback(null, true);
+      }
+
+      return callback(new Error('Not allowed by CORS'));
+    },
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
+  })
+);
+
+// Security middleware
 app.use(helmet());
-app.use(cors({ origin: process.env.CLIENT_ORIGIN, credentials: true }));
+
+// Body parsing
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+
+// Cookies
 app.use(cookieParser());
-app.use(json({ limit: '10mb' }));
-app.use(urlencoded({ extended: true, limit: '10mb' }));
+
+// Logging
 app.use(morgan('dev'));
 
 // Rate limiting
@@ -43,16 +96,40 @@ const limiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
 });
-app.use(limiter);
 
-// API routes (prefixed with /api)
+app.use('/api', limiter);
+
+// Health check
+app.get('/', (req, res) => {
+  res.status(200).json({
+    success: true,
+    message: 'Aerius API is running',
+  });
+});
+
+app.get('/api/health', (req, res) => {
+  res.status(200).json({
+    success: true,
+    message: 'API is healthy',
+  });
+});
+
+// API routes
 app.use('/api/auth', authRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/activity', activityRoutes);
 app.use('/api/simulator', simulatorRoutes);
 
-// Centralized error handling
+// 404 handler
+app.use((req, res) => {
+  res.status(404).json({
+    success: false,
+    message: `Route not found: ${req.method} ${req.originalUrl}`,
+  });
+});
+
+// Centralized error handler
 app.use(errorHandler);
 
 export default app;
